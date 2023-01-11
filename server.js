@@ -1,124 +1,135 @@
-const http = require('http');
-const uuid = require('uuid');
-const Koa = require('koa');
-const cors = require('koa2-cors');
-const Router = require('koa-router');
-const koaBody = require('koa-body');
+class Bot {
+  getBotText() {
+    const botText = [
+      'Профессионалом делает не диплом и не репутация, а именно знания и понимание всего относящегося к делу',
+      'Так уж мы устроены, что большинство из нас готовы совершенствоваться только осознавая, что другого выхода нет',
+      'Точные знания - основа точных прогнозов',
+      'Ум отчасти в том и состоит, чтобы отсекать разрешимые и важные для вас задачи от второстепенных',
+      'Количественной оценкой ума может служить доля принимаемых человеком правильных решений. И опять же, насколько я могу судить, людей, принимающих правильные решения в достаточно широкой сфере, можно считать умными вообще',
+      'Ум - дело наживное, и, как правило, умнее оказываются те, кто быстрее совершенствуется и не стесняется учиться постоянно',
+      'Самостоятельно изучайте наши ошибки, чтобы не повторять их, а делать свои собственные',
+      'Ценность информации заранее неизвестна никому',
+      'Игроки интеллектуальных игр - это люди, умеющие соображать в нетривиальных обстоятельствах',
+      'Интеллектуалу зачастую трудно принять решение - особенно если наличествующих сведений недостаточно для однозначного решения. Так что некоторый диктаторский склад ума и впрямь необходим',
+      'Новые теории в науке опровергаются так же непрерывно, как и создаются. Если что-то, несмотря на многочисленные попытки, осталось не опровергнутым - это надёжно по крайней мере для текущей работы. Если не опровергнуто достаточно давно - то скорее всего останется верным',
+    ];
+    const index = Math.floor(Math.random() * botText.length);
+
+    return botText[index];
+  }
+}
+
 const WS = require('ws');
-
-const app = new Koa();
-
-const contacts = [];
-
-class Clients {
-  constructor(id, name, active, status = true) {
-    this.id = id;
-    this.name = name;
-    this.active = active;
-    this.status = status;
-    this.msg = [];
-  }
-}
-
-app.use(
-  koaBody({
-    text: true,
-    urlencoded: true,
-    multipart: true,
-    json: true,
-  })
-);
-
-const id1 = uuid.v4();
-const id2 = uuid.v4();
-
-const firstContact = new Clients(id1, 'Vasserman', false);
-const secondContact = new Clients(id2, 'Druz', false);
-
-function createMsg(userId, created, message) {
-  return { userId, created, message };
-}
-
-const msg1 = createMsg(id1, new Date(), 'Привет Мир!');
-firstContact.msg.push(msg1);
-const msg2 = createMsg(id2, new Date(), 'Привет Страна!');
-secondContact.msg.push(msg2);
-
-contacts.push(firstContact);
-contacts.push(secondContact);
-
-app.use(
-  cors({
-    origin: '*',
-    credentials: true,
-    'Access-Control-Allow-Origin': true,
-    allowMethods: ['GET', 'POST', 'PUT', 'DELETE'],
-  })
-);
-
-const router = new Router();
-
-router.get('/contacts', async (ctx, next) => {
-  ctx.response.body = contacts;
-});
-router.post('/contacts', async (ctx, next) => {
-  contacts.push({ ...ctx.request.body, id: uuid.v4() });
-  ctx.response.status = 204;
-});
-router.put('/contacts', async (ctx, next) => {
-  const index = contacts.findIndex(
-    (item) => item.active === true || item.active === 'true'
-  );
-  contacts[index].active = false;
-
-  ctx.response.status = 204;
-});
-router.delete('/contacts/:id', async (ctx, next) => {
-  const index = contacts.findIndex(({ id }) => id === ctx.params.id);
-  if (index !== -1) {
-    contacts.splice(index, 1);
-  }
-  ctx.response.status = 204;
-});
-
-app.use(router.routes()).use(router.allowedMethods()); // middleware
+const { v4: uuid } = require('uuid');
+const clients = {};
+let usernames = ['Вассерманыч'];
+let messages = [];
 
 const port = process.env.PORT || 7070;
-const server = http.createServer(app.callback());
-const wsServer = new WS.Server({ server });
+const wss = new WS.Server({ port });
 
-wsServer.on('connection', (ws, req) => {
-  const errCallback = (err) => {
-    if (err) {
-      throw new Error(err);
-    }
-  };
+wss.on('connection', (ws) => {
+  const id = uuid();
+  clients[id] = ws;
+  console.log(`New client connected ${id}`);
+  ws.send(JSON.stringify({ renderUsers: true, names: usernames }));
+  if (messages.length !== 0) {
+    ws.send(JSON.stringify({ renderMessages: true, messages: messages }));
+  }
 
-  ws.on('message', (msg) => {
-    const request = JSON.parse(msg);
+  ws.on('message', (rawMessage) => {
+    const message = JSON.parse(rawMessage);
 
-    if (request.event === 'createMessage') {
-      const index = contacts.findIndex(
-        (item) => item.id === request.createMsg.idUser
-      );
-      contacts[index].msg.push(request.createMsg);
-    }
+    if (message.chooseUsername) {
+      if (usernames.every((name) => name !== message.username)) {
+        usernames.push(message.username);
+        clients[id].username = message.username;
+        const name = clients[id].username;
 
-    if (request.event === 'disableUser') {
-      const index = contacts.findIndex((item) => item.id === request.removeId);
-      if (index !== -1) {
-        contacts.splice(index, 1);
+        for (const id in clients) {
+          if (clients[id].username === name) {
+            clients[id].send(
+              JSON.stringify({ nameIsFree: true, name: message.username })
+            );
+          } else {
+            clients[id].send(
+              JSON.stringify({ renderNames: true, name: message.username })
+            );
+          }
+        }
+        return;
+      } else {
+        clients[id].send(JSON.stringify({ nameIsFree: false }));
+        return;
       }
     }
 
-    const data = JSON.stringify({
-      event: 'updateChat',
-      message: contacts,
-    });
-    ws.send(data);
+    if (message.chatMessage) {
+      const date = new Date().getTime();
+      const name = clients[id].username;
+
+      messages.push({
+        name: name,
+        message: message.messageText,
+        date: date,
+      });
+
+      for (const id in clients) {
+        if (clients[id].username === name) {
+          clients[id].send(
+            JSON.stringify({
+              renderOwnMessage: true,
+              name: 'You',
+              message: message.messageText,
+              date: date,
+            })
+          );
+        } else {
+          clients[id].send(
+            JSON.stringify({
+              renderMessage: true,
+              name: name,
+              message: message.messageText,
+              date: date,
+            })
+          );
+        }
+      }
+    }
+
+    if (message.chatMessage) {
+      const date = new Date().getTime();
+      const name = 'Вассерманыч';
+
+      const bot = new Bot();
+      let botMsg = bot.getBotText();
+      const delay = Math.floor(Math.random() * (botMsg.length * 100));
+      setTimeout(() => {
+        messages.push({
+          name: name,
+          message: botMsg,
+          date: date,
+        });
+        ws.send(
+          JSON.stringify({
+            renderMessage: true,
+            name: name,
+            message: botMsg,
+            date: date,
+          })
+        );
+      }, delay);
+    }
   });
 
-  ws.send('welcome', errCallback);
+  ws.on('close', () => {
+    usernames = usernames.filter((name) => name !== clients[id].username);
+    for (const index in clients) {
+      clients[index].send(
+        JSON.stringify({ closeUser: true, name: clients[id].username })
+      );
+    }
+    console.log(usernames);
+    delete clients[id];
+  });
 });
-
-server.listen(port, () => console.log('Server started'));
